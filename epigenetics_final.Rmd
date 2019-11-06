@@ -1,0 +1,134 @@
+---
+title: "epigenetics_final"
+author: "Brennan Baker"
+date: "April 1, 2019"
+output: html_document
+---
+
+
+```{r}
+library(tidyverse)
+library(broom)
+library(corrplot)
+library(psych)
+```
+
+Data import.
+
+```{r}
+df = read_csv(file = "C:/Users/brenn/Desktop/PHD 1/Epigenetics/epigenetics_final/data/Simulated_miRNA_Dataset_EHSC_P8326_Feb2019_FULL.csv")
+```
+
+For all the miRs we can use sapply, which applies a function to an entire dataset and provides the names of each column
+```{r}
+NAS = sapply(df, function(x) sum(is.na(x)))
+```
+
+Remove the miRs with greater than 70% NA
+First select only the columns with greater than 70%
+```{r}
+NAS.70 = NAS[NAS/1000 >= 0.7]
+#Then filter the dataset by the columns in that new vector
+#"!" operator means NOT
+#colnames and names are just the names of columns in a dataframe and a vector respectively
+# "%in%" opterator means "in"
+#We use the data[rows,columns] format to only select columns and save it as a new object
+data.clean = df[,!colnames(df) %in% names(NAS.70)]
+
+
+#Check to make sure there are no NAs
+NAS.clean = sapply(data.clean, function(x) sum(is.na(x)))
+sum(NAS.clean > 0)
+```
+
+Clean r environment
+```{r}
+rm(list= ls()[!(ls() %in% c("data.clean"))])
+gc()
+```
+
+Convert to long format
+```{r}
+#First create a "long" data.cleanset with miRNA name in one column and expression in another
+long.format = gather(data.clean, key = "miRNA", value = "expression", contains("mir"))
+
+# convert to factors
+long.format = long.format %>% mutate(Education = as.factor(Education),
+                                     SES = as.factor(SES),
+                                     Environmental_Smoking = as.factor(Environmental_Smoking),
+                                     Child_Sex = as.factor(Child_Sex))
+```
+
+Model of mirna --> child cognition adjusted for covaraites
+```{r}
+#First run the model
+fit.tidy = long.format %>% group_by(miRNA) %>% 
+  do(tidy(lm(GCI ~ expression + Education + SES + Maternal_Age + Maternal_BMI + Environmental_Smoking + Child_Sex, data=.)))
+
+#Then run the CIs
+fit.tidy.CI = long.format %>% group_by(miRNA) %>% 
+  do(as.data.frame(confint(lm(GCI ~ expression + Education + SES + Maternal_Age + Maternal_BMI + Environmental_Smoking + Child_Sex, data=.)))) %>%
+  bind_cols(fit.tidy)
+
+#FDR adjust p values
+fit.tidy.CI$FDR.q = p.adjust(fit.tidy.CI$p.value, method = "fdr")
+
+#Sum of sig FDR miRNAs
+fit1 = fit.tidy.CI %>% 
+  filter(term == "expression") 
+
+#shows 36 significant mirnas
+sum(fit1$FDR.q <= 0.05)
+
+```
+
+model of maternal violence --> mirna adjusted for covariates
+```{r}
+#First run the model
+fit.tidy = long.format %>% group_by(miRNA) %>% 
+  do(tidy(lm(expression ~ Rasch_ETV_Victim + Education + SES + Maternal_Age + Maternal_BMI + Environmental_Smoking + Child_Sex, data=.)))
+
+#Then run the CIs
+fit.tidy.CI = long.format %>% group_by(miRNA) %>% 
+  do(as.data.frame(confint(lm(expression ~ Rasch_ETV_Victim + Education + SES + Maternal_Age + Maternal_BMI + Environmental_Smoking + Child_Sex, data=.)))) %>%
+  bind_cols(fit.tidy)
+
+#FDR adjust p values
+fit.tidy.CI$FDR.q = p.adjust(fit.tidy.CI$p.value, method = "fdr")
+
+#Sum of sig FDR miRNAs
+fit2 = fit.tidy.CI %>% 
+  filter(term == "Rasch_ETV_Victim") 
+
+#shows 3 significant mirnas
+sum(fit2$FDR.q <= 0.05)
+```
+
+model of materal violence --> child cognition adjusted for covariates
+```{r}
+fit = lm(GCI ~ Rasch_ETV_Witnessed + Education + SES + Maternal_Age + Maternal_BMI + Environmental_Smoking + Child_Sex, data = data.clean)
+
+broomfit = broom::tidy(fit)
+```
+
+
+
+Formal mediation analysis: add the three miRNAs that significantly affected child cognition to model of maternal violence on child cognition. If this reduces the effect of maternal violence, then the miRNAs are mediators
+```{r}
+fitmed = lm(GCI ~ Rasch_ETV_Victim + Education + SES + Maternal_Age + Maternal_BMI + Environmental_Smoking + Child_Sex + mir_20a_A + mir_7_B + mir_942_B, data = data.clean)
+```
+
+Plot for figure 2
+```{r}
+df %>% ggplot(aes(y = GCI, x = Rasch_ETV_Victim)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  xlim(0,1) +
+    labs(title = "Figure 2",
+       x = "Rasch ETV Victim Score",
+       y = "General Cognitive Index") +
+  theme_bw() 
+
+ggsave("figure 2.jpg",dpi=300)
+```
+
